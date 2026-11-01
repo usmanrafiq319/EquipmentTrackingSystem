@@ -2,6 +2,7 @@ using EquipmentTracking.Api.Data;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
 var databasePath = builder.Configuration["DatabasePath"] ?? Path.Combine(builder.Environment.ContentRootPath, "data", "equipment-tracking.db");
@@ -97,27 +98,26 @@ app.MapGet("/api/auth/me", async (
     return Results.Ok(new AuthUser(user.Id, user.Email ?? user.UserName ?? string.Empty, user.UserName ?? user.Email ?? string.Empty, await users.GetRolesAsync(user)));
 }).RequireAuthorization();
 app.MapGet("/api/equipment", async (ApplicationDbContext db) =>
-    Results.Ok(await db.Equipment
+{
+    var equipment = await db.Equipment
         .AsNoTracking()
         .OrderBy(item => item.Name)
         .ThenBy(item => item.AssetId)
-        .Select(item => new EquipmentResponse(
-            item.AssetId,
-            item.Name,
-            item.TrackingMode,
-            item.Total,
-            item.Available,
-            item.CheckedOut,
-            item.Damaged,
-            item.Condition))
-        .ToListAsync()))
+        .ToListAsync();
+    var rules = await db.ApprovalRules.AsNoTracking().ToListAsync();
+    return Results.Ok(equipment.Select(item => ToEquipmentResponse(item, rules)));
+})
     .RequireAuthorization();
 app.MapGet("/api/equipment/{assetId}", async (string assetId, ApplicationDbContext db) =>
 {
     var item = await db.Equipment.AsNoTracking().SingleOrDefaultAsync(e => e.AssetId == assetId);
-    return item is null
-        ? Results.NotFound(new { error = "Equipment was not found." })
-        : Results.Ok(new EquipmentResponse(item.AssetId, item.Name, item.TrackingMode, item.Total, item.Available, item.CheckedOut, item.Damaged, item.Condition));
+    if (item is null)
+        return Results.NotFound(new { error = "Equipment was not found." });
+
+    var rules = await db.ApprovalRules.AsNoTracking()
+        .Where(rule => rule.EquipmentAssetId == item.AssetId)
+        .ToListAsync();
+    return Results.Ok(ToEquipmentResponse(item, rules));
 }).RequireAuthorization();
 app.MapPost("/api/equipment", async (CreateEquipmentRequest request, ApplicationDbContext db) =>
 {
@@ -129,6 +129,10 @@ app.MapPost("/api/equipment", async (CreateEquipmentRequest request, Application
         return Results.BadRequest(new { error = "Equipment name is required." });
     if (string.IsNullOrWhiteSpace(assetId))
         return Results.BadRequest(new { error = "Asset ID is required." });
+    if (assetId.Length > 100 || assetId.Contains('/'))
+        return Results.BadRequest(new { error = "Asset ID must be 100 characters or fewer and cannot contain '/'." });
+    if (name.Length > 200)
+        return Results.BadRequest(new { error = "Equipment name must be 200 characters or fewer." });
     if (!string.Equals(trackingMode, "Individual", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(trackingMode, "Pooled", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest(new { error = "Tracking mode must be Individual or Pooled." });
@@ -156,14 +160,13 @@ app.MapPost("/api/equipment", async (CreateEquipmentRequest request, Application
     {
         await db.SaveChangesAsync();
     }
-    catch (DbUpdateException)
+    catch (DbUpdateException exception) when (exception.InnerException is SqliteException { SqliteErrorCode: 19 })
     {
         return Results.BadRequest(new { error = "Asset ID already exists." });
     }
 
     return Results.Created($"/api/equipment/{Uri.EscapeDataString(equipment.AssetId)}",
-        new EquipmentResponse(equipment.AssetId, equipment.Name, equipment.TrackingMode, equipment.Total,
-            equipment.Available, equipment.CheckedOut, equipment.Damaged, equipment.Condition));
+        ToEquipmentResponse(equipment, []));
 }).RequireAuthorization(policy => policy.RequireRole("Office Staff", "Manager/Admin"));
 app.MapPost("/api/review/action", (HttpContext httpContext) =>
     Results.Ok(new { actor = httpContext.User.Identity?.Name }))
@@ -178,6 +181,13 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
+
+static EquipmentResponse ToEquipmentResponse(Equipment item, IEnumerable<ApprovalRule> rules) =>
+    new(item.AssetId, item.Name, item.TrackingMode, item.Total, item.Available,
+        item.CheckedOut, item.Damaged, item.Condition,
+        rules.Where(rule => rule.EquipmentAssetId == item.AssetId)
+            .Select(rule => rule.ApproverEmail)
+            .ToArray());
 
 app.Run();
 
@@ -197,4 +207,5 @@ public sealed record EquipmentResponse(
     int Available,
     int CheckedOut,
     int Damaged,
-    string Condition);
+    string Condition,
+    IReadOnlyList<string> ApproverEmails);

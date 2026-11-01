@@ -81,6 +81,14 @@ Angular production build passed. The review startup script was run separately.
 
 ## Review Triage Log
 
-No implementation findings remained after review. The API, UI, seed preservation,
-validation, authorization, and integration coverage were checked against the
-frozen edge-case matrix; no work was deferred.
+| Finding | Verdict | Evidence |
+|---|---|---|
+| Catalogue omitted seeded drone approval-rule data | medium | The response now includes `approverEmails`, and the integration test verifies `hamza@equipment.local` for `DRONE-001`. |
+| Broad database exception mapping | medium | Duplicate-key handling now matches SQLite constraint errors specifically; unrelated database failures remain visible as server errors. |
+| Asset IDs could be unaddressable or exceed model limits | medium | The API now rejects slash-containing IDs and explicit length violations with `400`. |
+| Manager/Admin creation was not covered | medium | Added an authenticated manager create assertion. |
+| Equipment detail body was not verified | low | Added assertions for the drone identity and approval data. |
+| Catalogue UI retained a session after `401` | medium | The UI now clears session/catalogue state and asks the user to sign in again. |
+| Frontend flow lacked automated component tests | false | Story 1.3 test expectations require API/EF integration coverage; no Angular test runner exists in the repository, and the UI is verified through the production build. |
+| Collection/detail authorization coverage was incomplete | false | The collection `401` path and protected create paths cover the server authorization boundary; detail uses the same `RequireAuthorization()` endpoint policy and adds no separate authorization rule. |
+| Concurrent duplicate creation was not tested | false | The unique database index and targeted SQLite constraint handling enforce the invariant; concurrency stress testing is outside this story's stated test expectations. |

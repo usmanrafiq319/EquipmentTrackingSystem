@@ -115,7 +115,13 @@ class AppComponent implements OnInit {
     try {
       const response = await fetch('/api/equipment', { credentials: 'same-origin' });
       if (!response.ok) {
-        this.catalogueError = response.status === 401 ? 'Please sign in again.' : 'Unable to load the equipment catalogue.';
+        if (response.status === 401) {
+          this.session = null;
+          this.equipment = [];
+          this.catalogueError = 'Please sign in again.';
+        } else {
+          this.catalogueError = 'Unable to load the equipment catalogue.';
+        }
         return;
       }
       this.equipment = await response.json() as Equipment[];
@@ -149,6 +155,10 @@ class AppComponent implements OnInit {
         })
       });
       if (!response.ok) {
+        if (response.status === 401) {
+          this.session = null;
+          this.equipment = [];
+        }
         const body = await response.json().catch(() => null) as { error?: string } | null;
         this.createError = body?.error ?? 'Unable to add equipment.';
         return;

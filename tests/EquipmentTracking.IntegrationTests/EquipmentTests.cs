@@ -29,7 +29,9 @@ public class EquipmentTests
         Assert.Equal(6, items.Single(item => item.GetProperty("assetId").GetString() == "FIELD-TABLETS").GetProperty("total").GetInt32());
         Assert.Equal("Good", items.Single(item => item.GetProperty("assetId").GetString() == "CAMERA-DEMO-01").GetProperty("condition").GetString());
         Assert.Equal("Restricted", items.Single(item => item.GetProperty("assetId").GetString() == "DRONE-001").GetProperty("condition").GetString());
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/equipment/DRONE-001")).StatusCode);
+        var drone = await client.GetFromJsonAsync<JsonElement>("/api/equipment/DRONE-001");
+        Assert.Equal("DRONE-001", drone.GetProperty("assetId").GetString());
+        Assert.Contains("hamza@equipment.local", drone.GetProperty("approverEmails").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/equipment/MISSING")).StatusCode);
     }
 
@@ -93,6 +95,11 @@ public class EquipmentTests
             new { name = " ", assetId = "INVALID-NAME", trackingMode = "Individual" })).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await officeStaff.PostAsJsonAsync("/api/equipment",
             new { name = "Missing ID", assetId = " ", trackingMode = "Individual" })).StatusCode);
+
+        using var manager = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(manager, "reviewer@equipment.local");
+        Assert.Equal(HttpStatusCode.Created, (await manager.PostAsJsonAsync("/api/equipment",
+            new { name = "Manager Asset", assetId = "MANAGER-001", trackingMode = "Individual" })).StatusCode);
     }
 
     private static WebApplicationFactory<Program> CreateFactory()
