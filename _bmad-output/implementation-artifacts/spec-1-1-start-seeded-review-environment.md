@@ -2,9 +2,10 @@
 title: 'Start the seeded review environment'
 type: 'feature'
 created: '2026-11-01'
-status: 'in-progress'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
+baseline_commit: '148397e968eb4ef0266da1d98bdec22a657ec4b9'
 context:
   - 'C:\Users\usman\EquipmentTrackingSystem\_bmad-output\implementation-artifacts\epic-1-context.md'
 ---
@@ -46,11 +47,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/EquipmentTracking.Api/` -- scaffold the `net8.0` API, EF Core 8 SQLite/Identity infrastructure, migration, health endpoint, and idempotent demo seed -- establish the local runtime boundary.
-- [ ] `src/equipment-tracking-web/` -- scaffold Angular 21 standalone production shell with pinned dependencies and API-compatible build output -- prove the approved client stack builds.
-- [ ] `tests/EquipmentTracking.IntegrationTests/` -- add focused startup, migration, seed repeatability, and health tests -- verify AC behavior without implementing later stories.
-- [ ] `scripts/start-review.ps1` -- implement prerequisite checks, restore/build/migrate/test orchestration, database path setup, and review process startup -- provide the one-command reviewer path.
-- [ ] `README.md` and `.gitignore` -- document and protect the local review environment -- make setup repeatable and secret-free.
+- [x] `src/EquipmentTracking.Api/` -- scaffold the `net8.0` API, EF Core 8 SQLite/Identity infrastructure, migration, health endpoint, and idempotent demo seed -- establish the local runtime boundary.
+- [x] `src/equipment-tracking-web/` -- scaffold Angular 21 standalone production shell with pinned dependencies and API-compatible build output -- prove the approved client stack builds.
+- [x] `tests/EquipmentTracking.IntegrationTests/` -- add focused startup, migration, seed repeatability, and health tests -- verify AC behavior without implementing later stories.
+- [x] `scripts/start-review.ps1` -- implement prerequisite checks, restore/build/migrate/test orchestration, database path setup, and review process startup -- provide the one-command reviewer path.
+- [x] `README.md` and `.gitignore` -- document and protect the local review environment -- make setup repeatable and secret-free.
 
 **Acceptance Criteria:**
 - Given supported Windows .NET 8 and Node/Angular 21 prerequisites, when `scripts/start-review.ps1` runs, then dependencies restore, Angular builds, the API targets `net8.0`, SQLite schema/migrations apply, deterministic seed data loads, verification passes, and the reviewable process starts.
@@ -58,6 +59,11 @@ context:
 - Given the reviewer follows the README, when they use documented local demo credentials and startup command, then the app is reachable without an external database, cloud service, secret, or manual database step.
 
 ## Implementation Notes
+
+- Added persisted `ApprovalRule` seed data for `DRONE-001` and `hamza@equipment.local`.
+- Seeded pooled quantities as four tripods and six field tablets, plus four named local demo accounts.
+- Added database-backed health checks, truthful readiness status, local EF tool restoration, and fatal native-command handling.
+- Integration tests now start two application factories against the same SQLite file to verify repeatable initialization.
 
 ## Verification
 
@@ -67,3 +73,21 @@ context:
 - `npm ci` and `npm run build` in `src/equipment-tracking-web` -- expected: Angular 21 production build succeeds.
 - `powershell -ExecutionPolicy Bypass -File scripts/start-review.ps1 -NoLaunch` -- expected: restore/build/migration/seed/health verification succeeds without starting a second persistent process.
 
+## Review Triage Log
+
+- blind-hunter: patch -- local `dotnet-ef` restoration was missing; added manifest restoration and restored the selected `dotnet-tools.json`.
+- blind-hunter: patch -- Node prerequisite accepted versions broader than the documented 24.x contract; narrowed the check.
+- blind-hunter: patch -- npm directory changes could leak on failure; wrapped the location change in `try/finally`.
+- blind-hunter: patch -- health was a constant success and readiness returned 200 for false; added a database health check and 503 readiness failure.
+- blind-hunter: patch -- role creation failures were ignored; seed now throws explicit errors.
+- blind-hunter: defer -- authentication endpoints and authorization are Story 1.2 scope and remain intentionally absent.
+- blind-hunter: defer -- mutable seeded-user password and data-drift repair are outside Story 1.1's reset/idempotency contract.
+- blind-hunter: defer -- approval-rule foreign keys and CORS hardening are later infrastructure concerns not required by this local foundation.
+- edge-case-hunter: patch -- database paths without a directory caused startup failure; directory creation is now guarded.
+- edge-case-hunter: defer -- concurrent multi-process seeding is outside the single-process local deployment boundary.
+- edge-case-hunter: patch -- seeded credentials now fail explicitly if an existing local account has drifted from the documented password.
+- edge-case-hunter: patch -- Node version check now matches the pinned 24.x requirement.
+- edge-case-hunter: defer -- launch-process exit reporting and live health polling are not needed for the blocking review process or Story 1.1 acceptance.
+- edge-case-hunter: defer -- expanded seed-drift assertions and relational approval foreign keys belong to later catalogue/approval stories.
+- verification-gap: patch -- repeatability test now creates two application factories against the same SQLite file.
+- verification-gap: patch -- readiness and health endpoint checks run against the initialized test application.

@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/.angular/
+**/dist/
+src/EquipmentTracking.Api/wwwroot/
+src/EquipmentTracking.Api/data/*.db*
+*.user

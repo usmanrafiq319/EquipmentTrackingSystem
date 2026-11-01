@@ -18,4 +18,26 @@ the installed .NET 10 SDK to infer the target framework. The command will
 initialize a writable local SQLite database, apply EF Core migrations, seed
 deterministic local-only demo data, and start the reviewable application.
 
-No application code has been generated yet.
+## Local review environment (Story 1.1)
+
+Prerequisites: Windows, .NET SDK 8.x, Node.js 24.x and npm. From the repository
+root run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-review.ps1
+```
+
+The command restores and builds the net8.0 API, installs the pinned Angular
+21 dependencies, builds the production shell, applies SQLite migrations,
+seeds deterministic local demo data, verifies health and starts the API at
+`http://localhost:5080`. Use `-NoLaunch` to verify without starting it.
+
+The seeded review accounts all use the local-only password `Review123!`:
+
+- `reviewer@equipment.local` (Manager/Admin)
+- `ali@equipment.local` (Field Staff)
+- `saima@equipment.local` (Office Staff)
+- `hamza@equipment.local` (Approver)
+The database is `src\EquipmentTracking.Api\data\equipment-tracking.db`; delete
+that file to reset it. This story intentionally provides only the runtime
+foundation and seed data; later workflow features are not available yet.
