@@ -41,3 +41,12 @@ The seeded review accounts all use the local-only password `Review123!`:
 The database is `src\EquipmentTracking.Api\data\equipment-tracking.db`; delete
 that file to reset it. This story intentionally provides only the runtime
 foundation and seed data; later workflow features are not available yet.
+
+## Sign-in (Story 1.2)
+
+The local shell signs in through `POST /api/auth/login` and keeps the
+same-origin Identity cookie. The current session is available from
+`GET /api/auth/me`; use `POST /api/auth/logout` to invalidate it. Invalid
+credentials return a generic `401`, and protected operations enforce roles on
+the server. The four accounts above are the complete local demo identity set;
+their password is only for local review and must not be reused elsewhere.
