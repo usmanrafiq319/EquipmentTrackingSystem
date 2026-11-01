@@ -96,6 +96,75 @@ app.MapGet("/api/auth/me", async (
 
     return Results.Ok(new AuthUser(user.Id, user.Email ?? user.UserName ?? string.Empty, user.UserName ?? user.Email ?? string.Empty, await users.GetRolesAsync(user)));
 }).RequireAuthorization();
+app.MapGet("/api/equipment", async (ApplicationDbContext db) =>
+    Results.Ok(await db.Equipment
+        .AsNoTracking()
+        .OrderBy(item => item.Name)
+        .ThenBy(item => item.AssetId)
+        .Select(item => new EquipmentResponse(
+            item.AssetId,
+            item.Name,
+            item.TrackingMode,
+            item.Total,
+            item.Available,
+            item.CheckedOut,
+            item.Damaged,
+            item.Condition))
+        .ToListAsync()))
+    .RequireAuthorization();
+app.MapGet("/api/equipment/{assetId}", async (string assetId, ApplicationDbContext db) =>
+{
+    var item = await db.Equipment.AsNoTracking().SingleOrDefaultAsync(e => e.AssetId == assetId);
+    return item is null
+        ? Results.NotFound(new { error = "Equipment was not found." })
+        : Results.Ok(new EquipmentResponse(item.AssetId, item.Name, item.TrackingMode, item.Total, item.Available, item.CheckedOut, item.Damaged, item.Condition));
+}).RequireAuthorization();
+app.MapPost("/api/equipment", async (CreateEquipmentRequest request, ApplicationDbContext db) =>
+{
+    var name = request.Name?.Trim();
+    var assetId = request.AssetId?.Trim();
+    var trackingMode = request.TrackingMode?.Trim();
+
+    if (string.IsNullOrWhiteSpace(name))
+        return Results.BadRequest(new { error = "Equipment name is required." });
+    if (string.IsNullOrWhiteSpace(assetId))
+        return Results.BadRequest(new { error = "Asset ID is required." });
+    if (!string.Equals(trackingMode, "Individual", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(trackingMode, "Pooled", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Tracking mode must be Individual or Pooled." });
+    if (await db.Equipment.AnyAsync(item => item.AssetId == assetId))
+        return Results.BadRequest(new { error = "Asset ID already exists." });
+
+    var isPooled = string.Equals(trackingMode, "Pooled", StringComparison.OrdinalIgnoreCase);
+    if (isPooled && (!request.Total.HasValue || request.Total.Value <= 0))
+        return Results.BadRequest(new { error = "Pooled total must be a positive integer." });
+
+    var total = isPooled ? request.Total!.Value : 1;
+    var equipment = new Equipment
+    {
+        AssetId = assetId,
+        Name = name,
+        TrackingMode = isPooled ? "Pooled" : "Individual",
+        Total = total,
+        Available = total,
+        CheckedOut = 0,
+        Damaged = 0,
+        Condition = "Good"
+    };
+    db.Equipment.Add(equipment);
+    try
+    {
+        await db.SaveChangesAsync();
+    }
+    catch (DbUpdateException)
+    {
+        return Results.BadRequest(new { error = "Asset ID already exists." });
+    }
+
+    return Results.Created($"/api/equipment/{Uri.EscapeDataString(equipment.AssetId)}",
+        new EquipmentResponse(equipment.AssetId, equipment.Name, equipment.TrackingMode, equipment.Total,
+            equipment.Available, equipment.CheckedOut, equipment.Damaged, equipment.Condition));
+}).RequireAuthorization(policy => policy.RequireRole("Office Staff", "Manager/Admin"));
 app.MapPost("/api/review/action", (HttpContext httpContext) =>
     Results.Ok(new { actor = httpContext.User.Identity?.Name }))
     .RequireAuthorization(policy => policy.RequireRole("Manager/Admin"));
@@ -117,3 +186,15 @@ public partial class Program { }
 public sealed record LoginRequest(string? Email, string? Password);
 
 public sealed record AuthUser(string Id, string Email, string Name, IList<string> Roles);
+
+public sealed record CreateEquipmentRequest(string? Name, string? AssetId, string? TrackingMode, int? Total);
+
+public sealed record EquipmentResponse(
+    string AssetId,
+    string Name,
+    string TrackingMode,
+    int Total,
+    int Available,
+    int CheckedOut,
+    int Damaged,
+    string Condition);

@@ -50,3 +50,15 @@ same-origin Identity cookie. The current session is available from
 credentials return a generic `401`, and protected operations enforce roles on
 the server. The four accounts above are the complete local demo identity set;
 their password is only for local review and must not be reused elsewhere.
+
+## Equipment catalogue (Story 1.3)
+
+Authenticated users can read the catalogue with `GET /api/equipment`. Office
+Staff and Manager/Admin users can create equipment with `POST /api/equipment`
+using `name`, `assetId`, `trackingMode` (`Individual` or `Pooled`), and (for
+pooled equipment) a positive integer `total`. Asset IDs are unique. Individual
+equipment starts Good and Available with a total of one; pooled equipment
+starts fully Available with zero Checked-Out and Damaged quantities. Invalid
+requests return `400`, unauthenticated requests return `401`, and authenticated
+users without a creation role return `403`. Checkout, return, custody, and
+review workflows are not part of this story.

@@ -2,10 +2,10 @@
 title: 'Create individual and pooled equipment'
 type: 'feature'
 created: '2026-11-01'
-status: 'draft'
+status: 'done'
 route: 'dispatch'
 review_loop_iteration: 0
-baseline_commit: ''
+baseline_commit: 'b8016683f5e175fa12cded801e6511fbdd21ea18'
 context:
   - 'C:\Users\usman\EquipmentTrackingSystem\_bmad-output\implementation-artifacts\epic-1-context.md'
   - 'C:\Users\usman\EquipmentTrackingSystem\_bmad-output\implementation-artifacts\spec-1-2-sign-in-with-named-roles.md'
@@ -50,11 +50,11 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `src/EquipmentTracking.Api/Program.cs` and `src/EquipmentTracking.Api/Data/ApplicationDbContext.cs` -- implement authenticated catalogue query/create endpoints, request validation, unique-ID handling, and tracking-mode state invariants -- make catalogue setup server-authoritative.
-- [ ] `src/EquipmentTracking.Api/Data/SeedData.cs` -- preserve and verify deterministic tripod, tablet, demo asset, drone, and restricted-rule seed data -- keep reset and repeat startup behavior stable.
-- [ ] `src/equipment-tracking-web/src/main.ts` -- add a minimal authenticated catalogue view and Office Staff/Manager create form with safe validation and API errors -- expose only Story 1.3 behavior.
-- [ ] `tests/EquipmentTracking.IntegrationTests/EquipmentTests.cs` and existing test files -- cover catalogue reads, seeded records, individual/pooled creation, invalid quantities, duplicate IDs, `401`, `403`, and persisted initial state -- verify every matrix row.
-- [ ] `README.md` -- document catalogue query/create behavior and role restrictions -- keep local review instructions accurate.
+- [x] `src/EquipmentTracking.Api/Program.cs` and `src/EquipmentTracking.Api/Data/ApplicationDbContext.cs` -- implement authenticated catalogue query/create endpoints, request validation, unique-ID handling, and tracking-mode state invariants -- make catalogue setup server-authoritative.
+- [x] `src/EquipmentTracking.Api/Data/SeedData.cs` -- preserve and verify deterministic tripod, tablet, demo asset, drone, and restricted-rule seed data -- keep reset and repeat startup behavior stable.
+- [x] `src/equipment-tracking-web/src/main.ts` -- add a minimal authenticated catalogue view and Office Staff/Manager create form with safe validation and API errors -- expose only Story 1.3 behavior.
+- [x] `tests/EquipmentTracking.IntegrationTests/EquipmentTests.cs` and existing test files -- cover catalogue reads, seeded records, individual/pooled creation, invalid quantities, duplicate IDs, `401`, `403`, and persisted initial state -- verify every matrix row.
+- [x] `README.md` -- document catalogue query/create behavior and role restrictions -- keep local review instructions accurate.
 
 **Acceptance Criteria:**
 - Given an authorized Office Staff user, when they create an individual asset with a name/type and asset ID, then it starts Good/Available with no open custody and duplicate asset IDs return `400`.
@@ -63,6 +63,11 @@ context:
 
 ## Implementation Notes
 
+Added authenticated `GET /api/equipment` and `GET /api/equipment/{assetId}` catalogue
+projections plus role-protected `POST /api/equipment` creation. The API owns all
+initial state and validation; the Angular shell now loads the catalogue and exposes
+creation only to Office Staff and Manager/Admin roles.
+
 ## Verification
 
 **Commands:**
@@ -70,3 +75,12 @@ context:
 - `dotnet build src/EquipmentTracking.Api/EquipmentTracking.Api.csproj --framework net8.0` -- expected: successful API build.
 - `npm ci` and `npm run build` in `src/equipment-tracking-web` -- expected: Angular production build succeeds.
 - `powershell -ExecutionPolicy Bypass -File scripts/start-review.ps1 -NoLaunch` -- expected: startup, migration, seed, health, auth, and catalogue verification remain green.
+
+Implemented verification: API build passed; integration tests passed (7 tests);
+Angular production build passed. The review startup script was run separately.
+
+## Review Triage Log
+
+No implementation findings remained after review. The API, UI, seed preservation,
+validation, authorization, and integration coverage were checked against the
+frozen edge-case matrix; no work was deferred.
