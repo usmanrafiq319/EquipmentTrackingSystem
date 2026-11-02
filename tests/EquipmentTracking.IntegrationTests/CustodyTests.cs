@@ -182,6 +182,25 @@ public class CustodyTests
     }
 
     [Fact]
+    public async Task Active_custody_projection_returns_borrower_and_due_status()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "TRIPODS", quantity = 2 });
+        Assert.Equal(HttpStatusCode.Created, checkout.StatusCode);
+
+        var projection = await client.GetFromJsonAsync<JsonElement>("/api/custody/active");
+        var record = Assert.Single(projection.EnumerateArray());
+        Assert.Equal("TRIPODS", record.GetProperty("equipmentAssetId").GetString());
+        Assert.Equal("ali@equipment.local", record.GetProperty("borrower").GetString());
+        Assert.Equal(2, record.GetProperty("outstandingQuantity").GetInt32());
+        Assert.Equal("DueSoon", record.GetProperty("dueStatus").GetString());
+    }
+
+    [Fact]
     public async Task Pooled_partial_return_reconciles_allocations_and_keeps_custody_open()
     {
         using var factory = CreateFactory();

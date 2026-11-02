@@ -11,5 +11,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .search-row input{flex:1;min-width:12rem}
 .catalogue{list-style:none;padding:0;display:grid;gap:.5rem}
 .equipment-link{width:100%;text-align:left;background:#eef6f8;color:#164e63}
-.error{color:#b42318}.success{color:#067647}.warning{color:#b54708}
+.custody-card{display:grid;gap:.5rem}.custody-card form{margin-top:.5rem}
+textarea{font:inherit;min-height:4rem;padding:.55rem;border:1px solid #8994a5;border-radius:.25rem;resize:vertical}
+.error{color:#b42318}.success{color:#067647}.warning{color:#b54708;font-weight:700}.status{color:#067647;font-weight:600}.notice{color:#7a4b00}
 @media (min-width:48rem){main{margin:3rem auto}.catalogue{grid-template-columns:repeat(2,minmax(0,1fr))}}

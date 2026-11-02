@@ -101,6 +101,62 @@ app.MapGet("/api/auth/me", async (
 
     return Results.Ok(new AuthUser(user.Id, user.Email ?? user.UserName ?? string.Empty, user.UserName ?? user.Email ?? string.Empty, await users.GetRolesAsync(user)));
 }).RequireAuthorization();
+app.MapGet("/api/custody/active", async (
+    HttpContext httpContext,
+    ApplicationDbContext db,
+    UserManager<IdentityUser> users,
+    TimeProvider clock) =>
+{
+    var actor = await users.GetUserAsync(httpContext.User);
+    if (actor is null)
+        return Results.Unauthorized();
+
+    var roles = await users.GetRolesAsync(actor);
+    var canViewAll = roles.Any(role => role is "Office Staff" or "Manager/Admin" or "Approver");
+    var records = db.CustodyRecords.AsNoTracking().Where(record => record.IsOpen);
+    if (!canViewAll)
+        records = records.Where(record => record.BorrowerId == actor.Id);
+
+    var rows = await (
+        from custody in records
+        join equipment in db.Equipment.AsNoTracking() on custody.EquipmentAssetId equals equipment.AssetId
+        join borrower in db.Users.AsNoTracking() on custody.BorrowerId equals borrower.Id
+        select new
+        {
+            custody.Id,
+            custody.EquipmentAssetId,
+            equipment.Name,
+            equipment.TrackingMode,
+            custody.BorrowerId,
+            Borrower = borrower.Email ?? borrower.UserName ?? borrower.Id,
+            custody.CheckedOutAt,
+            custody.DueAt,
+            custody.DeclaredLocation,
+            custody.Quantity,
+            custody.OutstandingQuantity,
+            custody.IsIndividual,
+            custody.Status
+        }).ToListAsync();
+    var now = clock.GetUtcNow();
+    return Results.Ok(rows
+        .OrderBy(row => row.DueAt)
+        .ThenBy(row => row.Name)
+        .Select(row => new ActiveCustodyResponse(
+            row.Id,
+            row.EquipmentAssetId,
+            row.Name,
+            row.TrackingMode,
+            row.BorrowerId,
+            row.Borrower,
+            row.CheckedOutAt,
+            row.DueAt,
+            row.DeclaredLocation,
+            row.Quantity,
+            row.OutstandingQuantity,
+            row.IsIndividual,
+            row.Status,
+            CustodyTimePolicy.GetDueStatus(row.DueAt, now))));
+}).RequireAuthorization();
 app.MapGet("/api/equipment", async (
     string? search,
     ApplicationDbContext db,
@@ -460,3 +516,19 @@ public sealed record EquipmentResponse(
     bool HasUnresolvedCustody,
     string? DueStatus,
     IReadOnlyList<string> ApproverEmails);
+
+public sealed record ActiveCustodyResponse(
+    Guid Id,
+    string EquipmentAssetId,
+    string EquipmentName,
+    string TrackingMode,
+    string BorrowerId,
+    string Borrower,
+    DateTimeOffset CheckedOutAt,
+    DateTimeOffset DueAt,
+    string? DeclaredLocation,
+    int Quantity,
+    int OutstandingQuantity,
+    bool IsIndividual,
+    string Status,
+    string? DueStatus);
