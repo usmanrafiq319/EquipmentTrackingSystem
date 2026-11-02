@@ -1,0 +1,125 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Threading.Tasks;
+using EquipmentTracking.Api.Data;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace EquipmentTracking.IntegrationTests;
+
+public class CustodyTests
+{
+    [Fact]
+    public async Task Checkout_requires_authentication_and_server_enforced_borrower_role()
+    {
+        using var factory = CreateFactory();
+        using var anonymous = factory.CreateClient();
+        var request = new { equipmentAssetId = "CAMERA-DEMO-01" };
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsJsonAsync("/api/custody/checkouts", request)).StatusCode);
+
+        using var field = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(field, "ali@equipment.local");
+        var forbidden = await field.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01", borrowerEmail = "saima@equipment.local" });
+        Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+    }
+
+    [Fact]
+    public async Task Restricted_checkout_is_rejected_for_manager_and_pending_request_does_not_reserve()
+    {
+        using var factory = CreateFactory();
+        using var manager = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(manager, "reviewer@equipment.local");
+
+        var rejected = await manager.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "DRONE-001" });
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+
+        var pending = await manager.PostAsJsonAsync("/api/approvals/requests",
+            new { equipmentAssetId = "DRONE-001" });
+        Assert.Equal(HttpStatusCode.Accepted, pending.StatusCode);
+        var pendingBody = await pending.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Pending", pendingBody.GetProperty("status").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var drone = await db.Equipment.SingleAsync(item => item.AssetId == "DRONE-001");
+        Assert.Equal(1, drone.Available);
+        Assert.Equal(0, drone.CheckedOut);
+        Assert.Empty(await db.CustodyRecords.ToListAsync());
+        Assert.Single(await db.ApprovalRequests.Where(request => request.Status == "Pending").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Checkout_validates_quantities_availability_and_duplicate_individual_custody()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await client.PostAsJsonAsync("/api/custody/checkouts",
+                new { equipmentAssetId = "TRIPODS", quantity = 0 })).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await client.PostAsJsonAsync("/api/custody/checkouts",
+                new { equipmentAssetId = "TRIPODS", quantity = 5 })).StatusCode);
+
+        var first = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01" });
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var duplicate = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01" });
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var camera = await db.Equipment.SingleAsync(item => item.AssetId == "CAMERA-DEMO-01");
+        Assert.Equal(0, camera.Available);
+        Assert.Equal(1, camera.CheckedOut);
+        Assert.Single(await db.CustodyRecords.Where(record => record.EquipmentAssetId == "CAMERA-DEMO-01").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Competing_pooled_checkouts_do_not_oversubscribe_inventory()
+    {
+        using var factory = CreateFactory();
+        using var first = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var second = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(first, "ali@equipment.local");
+        await LoginAsync(second, "saima@equipment.local");
+
+        var responses = await Task.WhenAll(
+            first.PostAsJsonAsync("/api/custody/checkouts", new { equipmentAssetId = "TRIPODS", quantity = 3 }),
+            second.PostAsJsonAsync("/api/custody/checkouts", new { equipmentAssetId = "TRIPODS", quantity = 3 }));
+
+        Assert.Contains(responses, response => response.StatusCode == HttpStatusCode.Created);
+        Assert.Contains(responses, response => response.StatusCode == HttpStatusCode.Conflict);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var tripods = await db.Equipment.SingleAsync(item => item.AssetId == "TRIPODS");
+        Assert.Equal(1, tripods.Available);
+        Assert.Equal(3, tripods.CheckedOut);
+        Assert.Equal(4, tripods.Available + tripods.CheckedOut + tripods.Damaged);
+    }
+
+    private static WebApplicationFactory<Program> CreateFactory()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"equipment-tracking-custody-{Guid.NewGuid():N}.db");
+        return new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseSetting("DatabasePath", databasePath));
+    }
+
+    private static async Task LoginAsync(HttpClient client, string email)
+    {
+        var response = await client.PostAsJsonAsync("/api/auth/login", new { email, password = "Review123!" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+}

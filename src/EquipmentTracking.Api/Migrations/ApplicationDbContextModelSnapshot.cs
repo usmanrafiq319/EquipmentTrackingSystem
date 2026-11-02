@@ -17,6 +17,50 @@ namespace EquipmentTracking.Api.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.11");
 
+            modelBuilder.Entity("EquipmentTracking.Api.Data.ApprovalRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BorrowerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DecisionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DeclaredLocation")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EquipmentAssetId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("RequestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestedById")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentAssetId", "BorrowerId", "Quantity", "Status");
+
+                    b.ToTable("ApprovalRequests");
+                });
+
             modelBuilder.Entity("EquipmentTracking.Api.Data.ApprovalRule", b =>
                 {
                     b.Property<int>("Id")
@@ -37,6 +81,61 @@ namespace EquipmentTracking.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("ApprovalRules");
+                });
+
+            modelBuilder.Entity("EquipmentTracking.Api.Data.CustodyRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ApprovalRequestId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BorrowerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CheckedOutAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CheckoutActorId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DeclaredLocation")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EquipmentAssetId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsIndividual")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsOpen")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("OutstandingQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentAssetId", "IsOpen", "IsIndividual")
+                        .IsUnique()
+                        .HasFilter("\"IsOpen\" = 1 AND \"IsIndividual\" = 1");
+
+                    b.ToTable("CustodyRecords");
                 });
 
             modelBuilder.Entity("EquipmentTracking.Api.Data.Equipment", b =>
@@ -74,6 +173,10 @@ namespace EquipmentTracking.Api.Migrations
                     b.Property<string>("TrackingMode")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 

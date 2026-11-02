@@ -72,5 +72,10 @@ availability, condition, approval restriction, nullable current custodian and
 due fields, overdue state, and unresolved-custody state. Pooled responses
 expose `total`, `available`, `checkedOut`, and `damaged`; the API rejects
 invalid persisted quantity invariants rather than repairing them in the client.
-Checkout and return workflows are intentionally deferred to Epic 2, so custody
-fields remain null/false until authoritative checkout records exist.
+The Story 2.1 backend foundation now exposes a shared
+`POST /api/custody/checkouts` command boundary and
+`POST /api/approvals/requests` for pending restricted requests. Server-side
+roles, availability, quantities, due/location validation, SQLite transactions,
+and the configured approval gate apply to every checkout command; pending
+requests do not reserve inventory. Checkout UI, approval decisions, returns,
+and the remaining custody workflow are intentionally deferred to later stories.

@@ -1,4 +1,5 @@
 using EquipmentTracking.Api.Data;
+using EquipmentTracking.Api.Features.Custody;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +11,8 @@ var databaseDirectory = Path.GetDirectoryName(databasePath);
 if (!string.IsNullOrEmpty(databaseDirectory))
     Directory.CreateDirectory(databaseDirectory);
 builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite($"Data Source={databasePath}"));
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<CheckoutCommandService>();
 builder.Services.AddIdentityCore<IdentityUser>(options =>
 {
     options.Password.RequiredLength = 8;
@@ -186,6 +189,99 @@ app.MapPost("/api/equipment", async (CreateEquipmentRequest request, Application
     return Results.Created($"/api/equipment/{Uri.EscapeDataString(equipment.AssetId)}",
         ToEquipmentResponse(equipment, []));
 }).RequireAuthorization(policy => policy.RequireRole("Office Staff", "Manager/Admin"));
+app.MapPost("/api/approvals/requests", async (
+        ApprovalRequestCommand request,
+        HttpContext httpContext,
+        ApplicationDbContext db,
+        UserManager<IdentityUser> users,
+        TimeProvider clock) =>
+{
+        var actor = await users.GetUserAsync(httpContext.User);
+        if (actor is null)
+            return Results.Unauthorized();
+
+        var roles = await users.GetRolesAsync(actor);
+        var borrower = actor;
+        if (!string.IsNullOrWhiteSpace(request.BorrowerEmail))
+        {
+            if (!roles.Contains("Office Staff") && !roles.Contains("Manager/Admin"))
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            borrower = await users.FindByEmailAsync(request.BorrowerEmail.Trim());
+            if (borrower is null)
+                return Results.BadRequest(new { error = "The borrower was not found." });
+        }
+
+        var equipment = await db.Equipment.SingleOrDefaultAsync(item => item.AssetId == request.EquipmentAssetId.Trim());
+        if (equipment is null)
+            return Results.NotFound(new { error = "Equipment was not found." });
+        if (!await db.ApprovalRules.AnyAsync(rule => rule.EquipmentAssetId == equipment.AssetId))
+            return Results.BadRequest(new { error = "Equipment does not require approval." });
+        var quantity = request.Quantity ?? 1;
+        if (quantity <= 0 || (equipment.TrackingMode == "Individual" && quantity != 1))
+            return Results.BadRequest(new { error = "Quantity must be a positive integer and match the equipment tracking mode." });
+        var dueAt = request.DueAt ?? clock.GetUtcNow().AddDays(1);
+        if (dueAt <= clock.GetUtcNow())
+            return Results.BadRequest(new { error = "Due time must be in the future." });
+        if (request.DeclaredLocation is { Length: > 200 })
+            return Results.BadRequest(new { error = "Declared location must be 200 characters or fewer." });
+
+        var approval = new ApprovalRequest
+        {
+            EquipmentAssetId = equipment.AssetId,
+            BorrowerId = borrower.Id,
+            RequestedById = actor.Id,
+            RequestedAt = clock.GetUtcNow(),
+            DueAt = dueAt,
+            DeclaredLocation = string.IsNullOrWhiteSpace(request.DeclaredLocation) ? null : request.DeclaredLocation.Trim(),
+            Quantity = quantity
+        };
+        db.ApprovalRequests.Add(approval);
+        await db.SaveChangesAsync();
+        return Results.Accepted($"/api/approvals/requests/{approval.Id}", new
+        {
+            id = approval.Id,
+            status = approval.Status,
+            equipmentAssetId = approval.EquipmentAssetId,
+            borrowerId = approval.BorrowerId,
+            quantity = approval.Quantity,
+            dueAt = approval.DueAt
+        });
+}).RequireAuthorization();
+app.MapPost("/api/custody/checkouts", async (
+        CheckoutRequest request,
+        HttpContext httpContext,
+        UserManager<IdentityUser> users,
+        CheckoutCommandService service,
+        CancellationToken cancellationToken) =>
+{
+        var actor = await users.GetUserAsync(httpContext.User);
+        if (actor is null)
+            return Results.Unauthorized();
+
+        var result = await service.ExecuteAsync(actor, new CheckoutCommand(
+            request.EquipmentAssetId ?? string.Empty,
+            request.BorrowerEmail,
+            request.Quantity,
+            request.DueAt,
+            request.DeclaredLocation), cancellationToken);
+        if (result.StatusCode == StatusCodes.Status201Created)
+        {
+            var custody = result.Custody!;
+            return Results.Created($"/api/custody/{custody.Id}", new
+            {
+                id = custody.Id,
+                equipmentAssetId = custody.EquipmentAssetId,
+                borrowerId = custody.BorrowerId,
+                checkoutActorId = custody.CheckoutActorId,
+                quantity = custody.Quantity,
+                outstandingQuantity = custody.OutstandingQuantity,
+                dueAt = custody.DueAt,
+                declaredLocation = custody.DeclaredLocation
+            });
+        }
+
+        return Results.Json(new { error = result.Error }, statusCode: result.StatusCode);
+}).RequireAuthorization();
 app.MapPost("/api/review/action", (HttpContext httpContext) =>
     Results.Ok(new { actor = httpContext.User.Identity?.Name }))
     .RequireAuthorization(policy => policy.RequireRole("Manager/Admin"));
@@ -228,6 +324,20 @@ public sealed record LoginRequest(string? Email, string? Password);
 public sealed record AuthUser(string Id, string Email, string Name, IList<string> Roles);
 
 public sealed record CreateEquipmentRequest(string? Name, string? AssetId, string? TrackingMode, int? Total);
+
+public sealed record CheckoutRequest(
+    string? EquipmentAssetId,
+    string? BorrowerEmail,
+    int? Quantity,
+    DateTimeOffset? DueAt,
+    string? DeclaredLocation);
+
+public sealed record ApprovalRequestCommand(
+    string EquipmentAssetId,
+    string? BorrowerEmail,
+    int? Quantity,
+    DateTimeOffset? DueAt,
+    string? DeclaredLocation);
 
 public sealed record EquipmentResponse(
     string AssetId,
