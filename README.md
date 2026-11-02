@@ -62,3 +62,15 @@ starts fully Available with zero Checked-Out and Damaged quantities. Invalid
 requests return `400`, unauthenticated requests return `401`, and authenticated
 users without a creation role return `403`. Checkout, return, custody, and
 review workflows are not part of this story.
+
+## Availability and custody projection (Story 1.4)
+
+Authenticated users can search the catalogue with
+`GET /api/equipment?search=term` or open an individual projection at
+`GET /api/equipment/{assetId}`. Individual responses expose authoritative
+availability, condition, approval restriction, nullable current custodian and
+due fields, overdue state, and unresolved-custody state. Pooled responses
+expose `total`, `available`, `checkedOut`, and `damaged`; the API rejects
+invalid persisted quantity invariants rather than repairing them in the client.
+Checkout and return workflows are intentionally deferred to Epic 2, so custody
+fields remain null/false until authoritative checkout records exist.

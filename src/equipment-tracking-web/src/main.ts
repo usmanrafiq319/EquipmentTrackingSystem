@@ -12,6 +12,13 @@ type Equipment = {
   checkedOut: number;
   damaged: number;
   condition: string;
+  isAvailable: boolean | null;
+  approvalRequired: boolean;
+  currentCustodian: string | null;
+  dueAt: string | null;
+  isOverdue: boolean;
+  hasUnresolvedCustody: boolean;
+  approverEmails: string[];
 };
 
 @Component({
@@ -27,17 +34,47 @@ type Equipment = {
         <p class="success">Your local review session is active.</p>
         <section aria-labelledby="catalogue-heading">
           <h2 id="catalogue-heading">Equipment catalogue</h2>
+          <form class="search" (ngSubmit)="searchCatalogue()">
+            <label for="catalogue-search">Search by name or asset ID</label>
+            <div class="search-row">
+              <input id="catalogue-search" name="search" [(ngModel)]="search" autocomplete="off">
+              <button type="submit" [disabled]="catalogueLoading">Search</button>
+              @if (search) { <button type="button" (click)="clearSearch()">Clear</button> }
+            </div>
+          </form>
           @if (catalogueLoading) { <p>Loading catalogue…</p> }
           @if (catalogueError) { <p class="error" role="alert">{{ catalogueError }}</p> }
-          @if (!catalogueLoading && !catalogueError && equipment.length === 0) { <p>No equipment has been added.</p> }
+          @if (!catalogueLoading && !catalogueError && equipment.length === 0) {
+            <p>{{ search.trim() ? 'No equipment matches your search.' : 'No equipment has been added.' }}</p>
+          }
           @if (equipment.length > 0) {
-            <ul>
+            <ul class="catalogue">
               @for (item of equipment; track item.assetId) {
-                <li><strong>{{ item.name }}</strong> ({{ item.assetId }}) —
-                  {{ item.trackingMode }}; {{ item.available }}/{{ item.total }} available;
-                  {{ item.condition }}</li>
+                <li><button type="button" class="equipment-link" (click)="selectEquipment(item)">
+                  <strong>{{ item.name }}</strong> ({{ item.assetId }})
+                </button></li>
               }
             </ul>
+          }
+          @if (selectedEquipment; as item) {
+            <article class="detail" aria-labelledby="detail-heading">
+              <h3 id="detail-heading">{{ item.name }}</h3>
+              <p><strong>Asset ID:</strong> {{ item.assetId }}</p>
+              <p><strong>Tracking:</strong> {{ item.trackingMode }}</p>
+              @if (item.trackingMode === 'Pooled') {
+                <p><strong>Total:</strong> {{ item.total }} · <strong>Available:</strong> {{ item.available }} ·
+                  <strong>Checked-out:</strong> {{ item.checkedOut }} · <strong>Damaged:</strong> {{ item.damaged }}</p>
+              } @else {
+                <p><strong>Availability:</strong> {{ item.isAvailable ? 'Available' : 'Unavailable' }}</p>
+                <p><strong>Condition:</strong> {{ item.condition }}</p>
+                <p><strong>Current custodian:</strong> {{ item.currentCustodian ?? 'None recorded' }}</p>
+                <p><strong>Due:</strong> {{ item.dueAt ?? 'None recorded' }}
+                  @if (item.isOverdue) { <span class="warning">(overdue)</span> }</p>
+                <p><strong>Unresolved custody:</strong> {{ item.hasUnresolvedCustody ? 'Yes' : 'No' }}</p>
+              }
+              <p><strong>Approval:</strong> {{ item.approvalRequired ? 'Restricted' : 'Not restricted' }}</p>
+              @if (item.approverEmails.length > 0) { <p><strong>Approvers:</strong> {{ item.approverEmails.join(', ') }}</p> }
+            </article>
           }
         </section>
         @if (canCreate) {
@@ -83,6 +120,8 @@ class AppComponent implements OnInit {
   error = '';
   loading = false;
   equipment: Equipment[] = [];
+  selectedEquipment: Equipment | null = null;
+  search = '';
   catalogueLoading = false;
   catalogueError = '';
   equipmentName = '';
@@ -113,11 +152,13 @@ class AppComponent implements OnInit {
     this.catalogueLoading = true;
     this.catalogueError = '';
     try {
-      const response = await fetch('/api/equipment', { credentials: 'same-origin' });
+      const query = this.search.trim() ? `?search=${encodeURIComponent(this.search.trim())}` : '';
+      const response = await fetch(`/api/equipment${query}`, { credentials: 'same-origin' });
       if (!response.ok) {
+        this.equipment = [];
+        this.selectedEquipment = null;
         if (response.status === 401) {
           this.session = null;
-          this.equipment = [];
           this.catalogueError = 'Please sign in again.';
         } else {
           this.catalogueError = 'Unable to load the equipment catalogue.';
@@ -125,11 +166,28 @@ class AppComponent implements OnInit {
         return;
       }
       this.equipment = await response.json() as Equipment[];
+      this.selectedEquipment = null;
     } catch {
+      this.equipment = [];
+      this.selectedEquipment = null;
       this.catalogueError = 'The local equipment service is unavailable.';
     } finally {
       this.catalogueLoading = false;
     }
+
+  }
+
+  async searchCatalogue(): Promise<void> {
+    await this.loadCatalogue();
+  }
+
+  clearSearch(): void {
+    this.search = '';
+    void this.loadCatalogue();
+  }
+
+  selectEquipment(item: Equipment): void {
+    this.selectedEquipment = item;
   }
 
   async createEquipment(): Promise<void> {
@@ -158,6 +216,7 @@ class AppComponent implements OnInit {
         if (response.status === 401) {
           this.session = null;
           this.equipment = [];
+          this.selectedEquipment = null;
         }
         const body = await response.json().catch(() => null) as { error?: string } | null;
         this.createError = body?.error ?? 'Unable to add equipment.';
@@ -208,6 +267,7 @@ class AppComponent implements OnInit {
       }
       this.session = null;
       this.equipment = [];
+      this.selectedEquipment = null;
     } catch {
       this.error = 'The local sign-in service is unavailable.';
     }

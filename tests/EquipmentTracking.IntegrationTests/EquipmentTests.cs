@@ -6,8 +6,10 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.Tasks;
+using EquipmentTracking.Api.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EquipmentTracking.IntegrationTests;
@@ -29,9 +31,18 @@ public class EquipmentTests
         Assert.Equal(6, items.Single(item => item.GetProperty("assetId").GetString() == "FIELD-TABLETS").GetProperty("total").GetInt32());
         Assert.Equal("Good", items.Single(item => item.GetProperty("assetId").GetString() == "CAMERA-DEMO-01").GetProperty("condition").GetString());
         Assert.Equal("Restricted", items.Single(item => item.GetProperty("assetId").GetString() == "DRONE-001").GetProperty("condition").GetString());
+        var tripod = items.Single(item => item.GetProperty("assetId").GetString() == "TRIPODS");
+        Assert.Equal(JsonValueKind.Null, tripod.GetProperty("isAvailable").ValueKind);
+        Assert.Equal(4, tripod.GetProperty("available").GetInt32() + tripod.GetProperty("checkedOut").GetInt32() + tripod.GetProperty("damaged").GetInt32());
         var drone = await client.GetFromJsonAsync<JsonElement>("/api/equipment/DRONE-001");
         Assert.Equal("DRONE-001", drone.GetProperty("assetId").GetString());
         Assert.Contains("hamza@equipment.local", drone.GetProperty("approverEmails").EnumerateArray().Select(value => value.GetString()));
+        Assert.True(drone.GetProperty("approvalRequired").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, drone.GetProperty("currentCustodian").ValueKind);
+        Assert.False(drone.GetProperty("isOverdue").GetBoolean());
+        var search = await client.GetFromJsonAsync<JsonElement[]>("/api/equipment?search=drOnE");
+        Assert.Single(search!);
+        Assert.Equal("DRONE-001", search![0].GetProperty("assetId").GetString());
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/equipment/MISSING")).StatusCode);
     }
 
@@ -74,6 +85,7 @@ public class EquipmentTests
         using var factory = CreateFactory();
         using var anonymous = factory.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/equipment")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/equipment/DRONE-001")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.PostAsJsonAsync("/api/equipment",
             new { name = "Nope", assetId = "NOPE", trackingMode = "Individual" })).StatusCode);
 
@@ -100,6 +112,36 @@ public class EquipmentTests
         await LoginAsync(manager, "reviewer@equipment.local");
         Assert.Equal(HttpStatusCode.Created, (await manager.PostAsJsonAsync("/api/equipment",
             new { name = "Manager Asset", assetId = "MANAGER-001", trackingMode = "Individual" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task Invalid_persisted_quantities_fail_list_and_detail_projections()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "reviewer@equipment.local");
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            db.Equipment.Add(new Equipment
+            {
+                AssetId = "INVALID-QUANTITY",
+                Name = "Invalid quantity",
+                TrackingMode = "Pooled",
+                Total = 2,
+                Available = 1,
+                CheckedOut = 0,
+                Damaged = 0,
+                Condition = "Good"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal(HttpStatusCode.InternalServerError,
+            (await client.GetAsync("/api/equipment?search=DRONE")).StatusCode);
+        Assert.Equal(HttpStatusCode.InternalServerError,
+            (await client.GetAsync("/api/equipment/INVALID-QUANTITY")).StatusCode);
     }
 
     private static WebApplicationFactory<Program> CreateFactory()

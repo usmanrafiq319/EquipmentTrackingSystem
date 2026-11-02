@@ -97,14 +97,29 @@ app.MapGet("/api/auth/me", async (
 
     return Results.Ok(new AuthUser(user.Id, user.Email ?? user.UserName ?? string.Empty, user.UserName ?? user.Email ?? string.Empty, await users.GetRolesAsync(user)));
 }).RequireAuthorization();
-app.MapGet("/api/equipment", async (ApplicationDbContext db) =>
+app.MapGet("/api/equipment", async (string? search, ApplicationDbContext db) =>
 {
     var equipment = await db.Equipment
         .AsNoTracking()
+        .ToListAsync();
+    if (!HasValidQuantities(equipment))
+        return Results.Problem("Equipment quantity data is invalid.", statusCode: StatusCodes.Status500InternalServerError);
+
+    if (!string.IsNullOrWhiteSpace(search))
+    {
+        var term = search.Trim();
+        equipment = equipment
+            .Where(item => item.Name.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                           item.AssetId.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    equipment = equipment
         .OrderBy(item => item.Name)
         .ThenBy(item => item.AssetId)
-        .ToListAsync();
+        .ToList();
     var rules = await db.ApprovalRules.AsNoTracking().ToListAsync();
+
     return Results.Ok(equipment.Select(item => ToEquipmentResponse(item, rules)));
 })
     .RequireAuthorization();
@@ -117,6 +132,9 @@ app.MapGet("/api/equipment/{assetId}", async (string assetId, ApplicationDbConte
     var rules = await db.ApprovalRules.AsNoTracking()
         .Where(rule => rule.EquipmentAssetId == item.AssetId)
         .ToListAsync();
+    if (!HasValidQuantities([item]))
+        return Results.Problem("Equipment quantity data is invalid.", statusCode: StatusCodes.Status500InternalServerError);
+
     return Results.Ok(ToEquipmentResponse(item, rules));
 }).RequireAuthorization();
 app.MapPost("/api/equipment", async (CreateEquipmentRequest request, ApplicationDbContext db) =>
@@ -185,9 +203,21 @@ using (var scope = app.Services.CreateScope())
 static EquipmentResponse ToEquipmentResponse(Equipment item, IEnumerable<ApprovalRule> rules) =>
     new(item.AssetId, item.Name, item.TrackingMode, item.Total, item.Available,
         item.CheckedOut, item.Damaged, item.Condition,
+        item.TrackingMode == "Individual" ? item.Available == 1 : null,
+        rules.Any(rule => rule.EquipmentAssetId == item.AssetId),
+        null, null, false, false,
         rules.Where(rule => rule.EquipmentAssetId == item.AssetId)
             .Select(rule => rule.ApproverEmail)
             .ToArray());
+
+static bool HasValidQuantities(IEnumerable<Equipment> equipment) =>
+    equipment.All(item =>
+        item.Total > 0 &&
+        item.Available >= 0 &&
+        item.CheckedOut >= 0 &&
+        item.Damaged >= 0 &&
+        (long)item.Available + item.CheckedOut + item.Damaged == item.Total &&
+        (item.TrackingMode != "Individual" || item.Total == 1));
 
 app.Run();
 
@@ -208,4 +238,10 @@ public sealed record EquipmentResponse(
     int CheckedOut,
     int Damaged,
     string Condition,
+    bool? IsAvailable,
+    bool ApprovalRequired,
+    string? CurrentCustodian,
+    DateTimeOffset? DueAt,
+    bool IsOverdue,
+    bool HasUnresolvedCustody,
     IReadOnlyList<string> ApproverEmails);
