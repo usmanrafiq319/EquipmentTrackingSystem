@@ -111,6 +111,49 @@ public class CustodyTests
         Assert.Equal(4, tripods.Available + tripods.CheckedOut + tripods.Damaged);
     }
 
+    [Fact]
+    public async Task Checkout_uses_karachi_tomorrow_default_and_refreshes_individual_projection()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01", declaredLocation = "Field vehicle" });
+        Assert.Equal(HttpStatusCode.Created, checkout.StatusCode);
+        var checkoutBody = await checkout.Content.ReadFromJsonAsync<JsonElement>();
+        var dueAt = checkoutBody.GetProperty("dueAt").GetDateTime();
+        var karachi = ResolveKarachiTimeZone();
+        var expectedDate = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, karachi).Date.AddDays(1);
+        Assert.Equal(expectedDate, TimeZoneInfo.ConvertTime(dueAt, karachi).Date);
+        Assert.Equal("Field vehicle", checkoutBody.GetProperty("declaredLocation").GetString());
+
+        var projection = await client.GetFromJsonAsync<JsonElement>("/api/equipment/CAMERA-DEMO-01");
+        Assert.Equal("ali@equipment.local", projection.GetProperty("currentCustodian").GetString());
+        Assert.Equal("DueSoon", projection.GetProperty("dueStatus").GetString());
+        Assert.True(projection.GetProperty("hasUnresolvedCustody").GetBoolean());
+        Assert.False(projection.GetProperty("isOverdue").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Checkout_normalizes_editable_due_date_to_utc()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        var requestedDueAt = DateTimeOffset.UtcNow.AddDays(3).AddMinutes(1);
+        var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01", dueAt = requestedDueAt });
+        Assert.Equal(HttpStatusCode.Created, checkout.StatusCode);
+        var body = await checkout.Content.ReadFromJsonAsync<JsonElement>();
+        var persistedDueAt = body.GetProperty("dueAt").GetDateTime();
+
+        Assert.Equal(requestedDueAt.UtcDateTime, persistedDueAt, precision: TimeSpan.FromSeconds(1));
+        var projection = await client.GetFromJsonAsync<JsonElement>("/api/equipment/CAMERA-DEMO-01");
+        Assert.Equal("Active", projection.GetProperty("dueStatus").GetString());
+    }
+
     private static WebApplicationFactory<Program> CreateFactory()
     {
         var databasePath = Path.Combine(Path.GetTempPath(), $"equipment-tracking-custody-{Guid.NewGuid():N}.db");
@@ -121,5 +164,17 @@ public class CustodyTests
     {
         var response = await client.PostAsJsonAsync("/api/auth/login", new { email, password = "Review123!" });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private static TimeZoneInfo ResolveKarachiTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Asia/Karachi");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Pakistan Standard Time");
+        }
     }
 }

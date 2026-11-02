@@ -45,8 +45,11 @@ public sealed class CheckoutCommandService(
                 return Invalid(StatusCodes.Status400BadRequest, "The borrower was not found.");
         }
 
-        var dueAt = command.DueAt ?? clock.GetUtcNow().AddDays(1);
-        if (dueAt <= clock.GetUtcNow())
+        var now = clock.GetUtcNow();
+        var dueAt = command.DueAt.HasValue
+            ? CustodyTimePolicy.Normalize(command.DueAt.Value)
+            : CustodyTimePolicy.DefaultDueAt(now);
+        if (dueAt <= now)
             return Invalid(StatusCodes.Status400BadRequest, "Due time must be in the future.");
         if (command.DeclaredLocation is { Length: > 200 })
             return Invalid(StatusCodes.Status400BadRequest, "Declared location must be 200 characters or fewer.");
@@ -116,7 +119,7 @@ public sealed class CheckoutCommandService(
             await transaction.RollbackAsync(cancellationToken);
             return Invalid(StatusCodes.Status409Conflict, "The equipment changed concurrently. Reload and retry.");
         }
-        catch (DbUpdateException exception) when (exception.InnerException is SqliteException { SqliteErrorCode: 5 or 6 })
+        catch (DbUpdateException exception) when (exception.InnerException is SqliteException { SqliteErrorCode: 5 or 6 or 19 })
         {
             await transaction.RollbackAsync(cancellationToken);
             return Invalid(StatusCodes.Status409Conflict, "The equipment is being updated. Reload and retry.");

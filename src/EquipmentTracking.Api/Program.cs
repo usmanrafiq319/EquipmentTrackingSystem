@@ -100,7 +100,10 @@ app.MapGet("/api/auth/me", async (
 
     return Results.Ok(new AuthUser(user.Id, user.Email ?? user.UserName ?? string.Empty, user.UserName ?? user.Email ?? string.Empty, await users.GetRolesAsync(user)));
 }).RequireAuthorization();
-app.MapGet("/api/equipment", async (string? search, ApplicationDbContext db) =>
+app.MapGet("/api/equipment", async (
+    string? search,
+    ApplicationDbContext db,
+    TimeProvider clock) =>
 {
     var equipment = await db.Equipment
         .AsNoTracking()
@@ -122,11 +125,29 @@ app.MapGet("/api/equipment", async (string? search, ApplicationDbContext db) =>
         .ThenBy(item => item.AssetId)
         .ToList();
     var rules = await db.ApprovalRules.AsNoTracking().ToListAsync();
+    var custody = await db.CustodyRecords.AsNoTracking()
+        .Where(record => record.IsOpen && record.IsIndividual)
+        .ToListAsync();
+    var borrowerIds = custody.Select(record => record.BorrowerId).Distinct().ToArray();
+    var borrowers = await db.Users.AsNoTracking()
+        .Where(user => borrowerIds.Contains(user.Id))
+        .ToDictionaryAsync(user => user.Id, user => user.Email ?? user.UserName ?? user.Id);
+    var now = clock.GetUtcNow();
 
-    return Results.Ok(equipment.Select(item => ToEquipmentResponse(item, rules)));
+    return Results.Ok(equipment.Select(item =>
+    {
+        var currentCustody = custody.SingleOrDefault(record => record.EquipmentAssetId == item.AssetId);
+        var custodian = currentCustody is not null && borrowers.TryGetValue(currentCustody.BorrowerId, out var email)
+            ? email
+            : null;
+        return ToEquipmentResponse(item, rules, currentCustody, custodian, now);
+    }));
 })
     .RequireAuthorization();
-app.MapGet("/api/equipment/{assetId}", async (string assetId, ApplicationDbContext db) =>
+app.MapGet("/api/equipment/{assetId}", async (
+    string assetId,
+    ApplicationDbContext db,
+    TimeProvider clock) =>
 {
     var item = await db.Equipment.AsNoTracking().SingleOrDefaultAsync(e => e.AssetId == assetId);
     if (item is null)
@@ -135,10 +156,18 @@ app.MapGet("/api/equipment/{assetId}", async (string assetId, ApplicationDbConte
     var rules = await db.ApprovalRules.AsNoTracking()
         .Where(rule => rule.EquipmentAssetId == item.AssetId)
         .ToListAsync();
+    var custody = await db.CustodyRecords.AsNoTracking()
+        .SingleOrDefaultAsync(record => record.EquipmentAssetId == item.AssetId && record.IsOpen && record.IsIndividual);
+    var custodian = custody is null
+        ? null
+        : await db.Users.AsNoTracking()
+            .Where(user => user.Id == custody.BorrowerId)
+            .Select(user => user.Email ?? user.UserName ?? user.Id)
+            .SingleOrDefaultAsync();
     if (!HasValidQuantities([item]))
         return Results.Problem("Equipment quantity data is invalid.", statusCode: StatusCodes.Status500InternalServerError);
 
-    return Results.Ok(ToEquipmentResponse(item, rules));
+    return Results.Ok(ToEquipmentResponse(item, rules, custody, custodian, clock.GetUtcNow()));
 }).RequireAuthorization();
 app.MapPost("/api/equipment", async (CreateEquipmentRequest request, ApplicationDbContext db) =>
 {
@@ -219,8 +248,11 @@ app.MapPost("/api/approvals/requests", async (
         var quantity = request.Quantity ?? 1;
         if (quantity <= 0 || (equipment.TrackingMode == "Individual" && quantity != 1))
             return Results.BadRequest(new { error = "Quantity must be a positive integer and match the equipment tracking mode." });
-        var dueAt = request.DueAt ?? clock.GetUtcNow().AddDays(1);
-        if (dueAt <= clock.GetUtcNow())
+        var now = clock.GetUtcNow();
+        var dueAt = request.DueAt.HasValue
+            ? CustodyTimePolicy.Normalize(request.DueAt.Value)
+            : CustodyTimePolicy.DefaultDueAt(now);
+        if (dueAt <= now)
             return Results.BadRequest(new { error = "Due time must be in the future." });
         if (request.DeclaredLocation is { Length: > 200 })
             return Results.BadRequest(new { error = "Declared location must be 200 characters or fewer." });
@@ -244,7 +276,7 @@ app.MapPost("/api/approvals/requests", async (
             equipmentAssetId = approval.EquipmentAssetId,
             borrowerId = approval.BorrowerId,
             quantity = approval.Quantity,
-            dueAt = approval.DueAt
+            dueAt = approval.DueAt.UtcDateTime
         });
 }).RequireAuthorization();
 app.MapPost("/api/custody/checkouts", async (
@@ -273,10 +305,15 @@ app.MapPost("/api/custody/checkouts", async (
                 equipmentAssetId = custody.EquipmentAssetId,
                 borrowerId = custody.BorrowerId,
                 checkoutActorId = custody.CheckoutActorId,
+                checkedOutAt = custody.CheckedOutAt.UtcDateTime,
                 quantity = custody.Quantity,
                 outstandingQuantity = custody.OutstandingQuantity,
-                dueAt = custody.DueAt,
-                declaredLocation = custody.DeclaredLocation
+                dueAt = custody.DueAt.UtcDateTime,
+                declaredLocation = custody.DeclaredLocation,
+                isIndividual = custody.IsIndividual,
+                isOpen = custody.IsOpen,
+                status = custody.Status,
+                approvalRequestId = custody.ApprovalRequestId
             });
         }
 
@@ -296,12 +333,19 @@ using (var scope = app.Services.CreateScope())
     await SeedData.InitializeAsync(scope.ServiceProvider);
 }
 
-static EquipmentResponse ToEquipmentResponse(Equipment item, IEnumerable<ApprovalRule> rules) =>
+static EquipmentResponse ToEquipmentResponse(
+    Equipment item,
+    IEnumerable<ApprovalRule> rules,
+    CustodyRecord? custody = null,
+    string? custodian = null,
+    DateTimeOffset? now = null) =>
     new(item.AssetId, item.Name, item.TrackingMode, item.Total, item.Available,
         item.CheckedOut, item.Damaged, item.Condition,
         item.TrackingMode == "Individual" ? item.Available == 1 : null,
         rules.Any(rule => rule.EquipmentAssetId == item.AssetId),
-        null, null, false, false,
+        custodian, custody?.DueAt, custody is not null && custody.DueAt <= (now ?? DateTimeOffset.UtcNow),
+        custody is not null && custody.IsOpen,
+        CustodyTimePolicy.GetDueStatus(custody?.DueAt, now ?? DateTimeOffset.UtcNow),
         rules.Where(rule => rule.EquipmentAssetId == item.AssetId)
             .Select(rule => rule.ApproverEmail)
             .ToArray());
@@ -354,4 +398,5 @@ public sealed record EquipmentResponse(
     DateTimeOffset? DueAt,
     bool IsOverdue,
     bool HasUnresolvedCustody,
+    string? DueStatus,
     IReadOnlyList<string> ApproverEmails);
