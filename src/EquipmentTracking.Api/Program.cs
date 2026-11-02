@@ -13,6 +13,7 @@ if (!string.IsNullOrEmpty(databaseDirectory))
 builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlite($"Data Source={databasePath}"));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<CheckoutCommandService>();
+builder.Services.AddScoped<ReturnCommandService>();
 builder.Services.AddIdentityCore<IdentityUser>(options =>
 {
     options.Password.RequiredLength = 8;
@@ -319,6 +320,58 @@ app.MapPost("/api/custody/checkouts", async (
 
         return Results.Json(new { error = result.Error }, statusCode: result.StatusCode);
 }).RequireAuthorization();
+app.MapPost("/api/custody/{custodyId:guid}/returns", async (
+        Guid custodyId,
+        ReturnRequest request,
+        HttpContext httpContext,
+        UserManager<IdentityUser> users,
+        ReturnCommandService service,
+        CancellationToken cancellationToken) =>
+{
+    var actor = await users.GetUserAsync(httpContext.User);
+    if (actor is null)
+        return Results.Unauthorized();
+
+    var result = await service.ExecuteAsync(actor, new ReturnCommand(
+        custodyId,
+        request.Quantity,
+        request.Condition,
+        request.GoodQuantity,
+        request.DamagedQuantity,
+        request.Note), cancellationToken);
+    if (result.StatusCode != StatusCodes.Status200OK)
+        return Results.Json(new { error = result.Error }, statusCode: result.StatusCode);
+
+    var custody = result.Custody!;
+    var returnEvent = result.Event!;
+    return Results.Ok(new
+    {
+        custody = new
+        {
+            id = custody.Id,
+            equipmentAssetId = custody.EquipmentAssetId,
+            borrowerId = custody.BorrowerId,
+            quantity = custody.Quantity,
+            outstandingQuantity = custody.OutstandingQuantity,
+            isIndividual = custody.IsIndividual,
+            isOpen = custody.IsOpen,
+            status = custody.Status
+        },
+        @event = new
+        {
+            id = returnEvent.Id,
+            custodyRecordId = returnEvent.CustodyRecordId,
+            equipmentAssetId = returnEvent.EquipmentAssetId,
+            actorId = returnEvent.ActorId,
+            returnedAt = returnEvent.ReturnedAt.UtcDateTime,
+            quantity = returnEvent.Quantity,
+            condition = returnEvent.Condition,
+            goodQuantity = returnEvent.GoodQuantity,
+            damagedQuantity = returnEvent.DamagedQuantity,
+            note = returnEvent.Note
+        }
+    });
+}).RequireAuthorization();
 app.MapPost("/api/review/action", (HttpContext httpContext) =>
     Results.Ok(new { actor = httpContext.User.Identity?.Name }))
     .RequireAuthorization(policy => policy.RequireRole("Manager/Admin"));
@@ -375,6 +428,13 @@ public sealed record CheckoutRequest(
     int? Quantity,
     DateTimeOffset? DueAt,
     string? DeclaredLocation);
+
+public sealed record ReturnRequest(
+    int? Quantity,
+    string? Condition,
+    int? GoodQuantity,
+    int? DamagedQuantity,
+    string? Note);
 
 public sealed record ApprovalRequestCommand(
     string EquipmentAssetId,

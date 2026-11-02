@@ -186,6 +186,50 @@ namespace EquipmentTracking.Api.Migrations
                     b.ToTable("Equipment");
                 });
 
+            modelBuilder.Entity("EquipmentTracking.Api.Data.ReturnEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Condition")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CustodyRecordId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DamagedQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EquipmentAssetId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("GoodQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("ReturnedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustodyRecordId");
+
+                    b.ToTable("ReturnEvents");
+                });
+
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
                 {
                     b.Property<string>("Id")
@@ -376,6 +420,15 @@ namespace EquipmentTracking.Api.Migrations
                     b.HasKey("UserId", "LoginProvider", "Name");
 
                     b.ToTable("AspNetUserTokens", (string)null);
+                });
+
+            modelBuilder.Entity("EquipmentTracking.Api.Data.ReturnEvent", b =>
+                {
+                    b.HasOne("EquipmentTracking.Api.Data.CustodyRecord", null)
+                        .WithMany()
+                        .HasForeignKey("CustodyRecordId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

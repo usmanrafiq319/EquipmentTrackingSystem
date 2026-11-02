@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using EquipmentTracking.Api.Data;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -152,6 +153,121 @@ public class CustodyTests
         Assert.Equal(requestedDueAt.UtcDateTime, persistedDueAt, precision: TimeSpan.FromSeconds(1));
         var projection = await client.GetFromJsonAsync<JsonElement>("/api/equipment/CAMERA-DEMO-01");
         Assert.Equal("Active", projection.GetProperty("dueStatus").GetString());
+    }
+
+    [Fact]
+    public async Task Individual_return_appends_event_and_refreshes_projection()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01" });
+        var checkoutBody = await checkout.Content.ReadFromJsonAsync<JsonElement>();
+        var custodyId = checkoutBody.GetProperty("id").GetGuid();
+
+        var returned = await client.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+            new { condition = "Good", note = "Returned to office" });
+        Assert.Equal(HttpStatusCode.OK, returned.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var camera = await db.Equipment.SingleAsync(item => item.AssetId == "CAMERA-DEMO-01");
+        Assert.Equal((1, 0, 0), (camera.Available, camera.CheckedOut, camera.Damaged));
+        var custody = await db.CustodyRecords.SingleAsync(item => item.Id == custodyId);
+        Assert.False(custody.IsOpen);
+        var @event = await db.ReturnEvents.SingleAsync();
+        Assert.Equal(("Good", 1, "Returned to office"), (@event.Condition, @event.Quantity, @event.Note));
+    }
+
+    [Fact]
+    public async Task Pooled_partial_return_reconciles_allocations_and_keeps_custody_open()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "TRIPODS", quantity = 3 });
+        var checkoutBody = await checkout.Content.ReadFromJsonAsync<JsonElement>();
+        var custodyId = checkoutBody.GetProperty("id").GetGuid();
+
+        var returned = await client.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+            new { quantity = 2, goodQuantity = 1, damagedQuantity = 1 });
+        Assert.Equal(HttpStatusCode.OK, returned.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var tripods = await db.Equipment.SingleAsync(item => item.AssetId == "TRIPODS");
+        Assert.Equal((2, 1, 1), (tripods.Available, tripods.CheckedOut, tripods.Damaged));
+        var custody = await db.CustodyRecords.SingleAsync(item => item.Id == custodyId);
+        Assert.True(custody.IsOpen);
+        Assert.Equal(1, custody.OutstandingQuantity);
+    }
+
+    [Fact]
+    public async Task Invalid_and_unauthorized_returns_do_not_mutate_state()
+    {
+        using var factory = CreateFactory();
+        using var borrower = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var other = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using (var seedScope = factory.Services.CreateScope())
+        {
+            var users = seedScope.ServiceProvider.GetRequiredService<UserManager<IdentityUser>>();
+            var fieldUser = new IdentityUser
+            {
+                UserName = "other-field@equipment.local",
+                Email = "other-field@equipment.local",
+                EmailConfirmed = true
+            };
+            await users.CreateAsync(fieldUser, "Review123!");
+            await users.AddToRoleAsync(fieldUser, "Field Staff");
+        }
+        await LoginAsync(borrower, "ali@equipment.local");
+        await LoginAsync(other, "other-field@equipment.local");
+
+        var checkout = await borrower.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "TRIPODS", quantity = 2 });
+        var custodyId = (await checkout.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await other.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+                new { quantity = 1, goodQuantity = 1 })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await borrower.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+                new { quantity = 2, goodQuantity = 1, damagedQuantity = 0 })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await borrower.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+                new { quantity = 3, goodQuantity = 3 })).StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var tripods = await db.Equipment.SingleAsync(item => item.AssetId == "TRIPODS");
+        Assert.Equal((2, 2, 0), (tripods.Available, tripods.CheckedOut, tripods.Damaged));
+        Assert.Empty(await db.ReturnEvents.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Individual_damaged_return_is_unavailable_and_duplicate_is_rejected()
+    {
+        using var factory = CreateFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        await LoginAsync(client, "ali@equipment.local");
+
+        var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
+            new { equipmentAssetId = "CAMERA-DEMO-01" });
+        var custodyId = (await checkout.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.OK,
+            (await client.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+                new { condition = "Damaged" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await client.PostAsJsonAsync($"/api/custody/{custodyId}/returns",
+                new { condition = "Damaged" })).StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var camera = await db.Equipment.SingleAsync(item => item.AssetId == "CAMERA-DEMO-01");
+        Assert.Equal((0, 0, 1), (camera.Available, camera.CheckedOut, camera.Damaged));
     }
 
     private static WebApplicationFactory<Program> CreateFactory()

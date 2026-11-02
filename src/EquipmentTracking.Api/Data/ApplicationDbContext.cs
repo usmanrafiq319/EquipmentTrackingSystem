@@ -11,6 +11,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<ApprovalRule> ApprovalRules => Set<ApprovalRule>();
     public DbSet<CustodyRecord> CustodyRecords => Set<CustodyRecord>();
     public DbSet<ApprovalRequest> ApprovalRequests => Set<ApprovalRequest>();
+    public DbSet<ReturnEvent> ReturnEvents => Set<ReturnEvent>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
@@ -23,6 +24,11 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             .IsUnique()
             .HasFilter("\"IsOpen\" = 1 AND \"IsIndividual\" = 1");
         builder.Entity<ApprovalRequest>().HasIndex(x => new { x.EquipmentAssetId, x.BorrowerId, x.Quantity, x.Status });
+        builder.Entity<ReturnEvent>().HasOne<CustodyRecord>()
+            .WithMany()
+            .HasForeignKey(x => x.CustodyRecordId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<ReturnEvent>().Property(x => x.Note).HasMaxLength(2000);
     }
 
 }
@@ -77,4 +83,18 @@ public class ApprovalRequest
     public int Quantity { get; set; }
     public string Status { get; set; } = "Pending";
     public string? DecisionReason { get; set; }
+}
+
+public class ReturnEvent
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid CustodyRecordId { get; set; }
+    public required string EquipmentAssetId { get; set; }
+    public required string ActorId { get; set; }
+    public DateTimeOffset ReturnedAt { get; set; }
+    public int Quantity { get; set; }
+    public string Condition { get; set; } = "Good";
+    public int GoodQuantity { get; set; }
+    public int DamagedQuantity { get; set; }
+    public string? Note { get; set; }
 }
