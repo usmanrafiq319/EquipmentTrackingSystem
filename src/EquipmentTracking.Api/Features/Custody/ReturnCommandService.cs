@@ -54,10 +54,20 @@ public sealed class ReturnCommandService(
 
             if (!TryValidateAllocation(custody, command, out var quantity, out var good, out var damaged, out var condition, out var error))
                 return Invalid(StatusCodes.Status400BadRequest, error!);
+            if (string.IsNullOrWhiteSpace(command.Note) is false && command.Note.Trim().Length > 2000)
+                return Invalid(StatusCodes.Status400BadRequest, "Return note must be 2000 characters or fewer.");
+            if (equipment.CheckedOut < quantity ||
+                equipment.Available < 0 ||
+                equipment.CheckedOut < 0 ||
+                equipment.Damaged < 0 ||
+                (long)equipment.Available + equipment.CheckedOut + equipment.Damaged != equipment.Total)
+                return Invalid(StatusCodes.Status409Conflict, "The equipment inventory state is inconsistent.");
 
             equipment.CheckedOut -= quantity;
             equipment.Available += good;
             equipment.Damaged += damaged;
+            if (custody.IsIndividual)
+                equipment.Condition = condition;
             equipment.Version++;
             custody.OutstandingQuantity -= quantity;
             if (custody.OutstandingQuantity == 0)
@@ -136,7 +146,13 @@ public sealed class ReturnCommandService(
                 error = "The returned quantity exceeds the outstanding custody quantity.";
                 return false;
             }
-            condition = good > 0 && damaged > 0 ? "Mixed" : damaged > 0 ? "Damaged" : "Good";
+            var derivedCondition = good > 0 && damaged > 0 ? "Mixed" : damaged > 0 ? "Damaged" : "Good";
+            if (!string.IsNullOrEmpty(condition) && condition != derivedCondition)
+            {
+                error = "The pooled return condition must match its Good and Damaged allocations.";
+                return false;
+            }
+            condition = derivedCondition;
         }
 
         if (quantity <= 0 || quantity > custody.OutstandingQuantity)

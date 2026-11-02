@@ -268,6 +268,7 @@ public class CustodyTests
         var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         var camera = await db.Equipment.SingleAsync(item => item.AssetId == "CAMERA-DEMO-01");
         Assert.Equal((0, 0, 1), (camera.Available, camera.CheckedOut, camera.Damaged));
+        Assert.Equal("Damaged", camera.Condition);
     }
 
     private static WebApplicationFactory<Program> CreateFactory()

@@ -61,9 +61,18 @@ context:
 
 ## Implementation Notes
 
+- Added `ReturnEvent` persistence and additive migration.
+- Return commands use the existing serializable SQLite transaction and equipment version token; individual damaged returns persist `Condition = "Damaged"` and remain unavailable.
+- Added pooled allocation, note-length, and inventory-invariant validation after review.
+
 ## Spec Change Log
 
 ## Review Triage Log
+
+- `medium` -- pooled condition, oversized note, and pre-mutation inventory validation gaps were verified and fixed in `ReturnCommandService`.
+- `false` -- transaction-startup conflict claim was not present in the cited implementation; existing transaction error mapping covers database update/SQLite conflicts.
+- `false` -- projection-refresh gap was disproven by the existing API projection path and the passing integration/startup suite.
+- `low` -- additional concurrency and authorized-office tests were suggested; existing checkout concurrency conventions and return authorization coverage remain intact, with no deferred acceptance criterion.
 
 ## Verification
 
@@ -72,4 +81,4 @@ context:
 - `dotnet build .\src\EquipmentTracking.Api\EquipmentTracking.Api.csproj --framework net8.0 --no-restore` -- expected: build succeeds.
 - `.\scripts\start-review.ps1 -NoLaunch` -- expected: readiness and seeded review startup succeed.
 
-**Result:** Integration tests passed (17/17); API build succeeded with 0 warnings and 0 errors. Review findings: none deferred.
+**Result:** Integration tests passed (18/18); API build succeeded with 0 warnings and 0 errors; final `start-review.ps1 -NoLaunch` passed including Angular build, migrations, and seeded startup. Review findings were triaged with no unresolved high-severity issue.
