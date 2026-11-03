@@ -76,4 +76,12 @@ context:
 - `npm run build` in `src\equipment-tracking-web` -- expected: Angular production build succeeds.
 - `.\scripts\start-review.ps1 -NoLaunch` -- expected: seeded API and Angular reviewer startup succeeds.
 
-**Result:** 19 integration tests passed; the API build completed with 0 warnings and 0 errors; the Angular production build succeeded; seeded reviewer startup passed. `npm install` reported existing dependency audit findings (31 vulnerabilities) without changing the manifest.
+**Result:** 19 integration tests passed; the API build completed with 0 errors (one file-lock warning occurred during a concurrent build); the Angular production build succeeded from `src/equipment-tracking-web`; seeded reviewer startup passed. `npm install` reported existing dependency audit findings (31 vulnerabilities) without changing the manifest.
+
+## Review Triage Log
+
+- `medium` -- `src/equipment-tracking-web/src/main.ts`: failed custody and catalogue refreshes could leave stale actionable records visible; cleared projections on non-success responses.
+- `medium` -- `src/equipment-tracking-web/src/main.ts`: checkout exposed restricted equipment and omitted the editable due time; restricted checkout is now hidden and due time defaults to tomorrow and is submitted.
+- `low` -- `src/equipment-tracking-web/src/main.ts`: empty catalogue messaging did not distinguish no data from no search matches; restored the existing distinction.
+- `medium` -- `tests/EquipmentTracking.IntegrationTests/CustodyTests.cs`: active-custody projection lacked borrower-isolation and office-visibility assertions; added both scenarios.
+- `defer` -- Angular behavioral tests are not configured in the existing project; production compilation and API integration coverage verify the available surfaces, while browser/manual timing remains a reviewer check.

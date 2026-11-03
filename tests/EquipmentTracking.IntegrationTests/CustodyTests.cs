@@ -186,11 +186,18 @@ public class CustodyTests
     {
         using var factory = CreateFactory();
         using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var otherBorrower = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        using var office = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         await LoginAsync(client, "ali@equipment.local");
+        await LoginAsync(otherBorrower, "saima@equipment.local");
+        await LoginAsync(office, "reviewer@equipment.local");
 
         var checkout = await client.PostAsJsonAsync("/api/custody/checkouts",
             new { equipmentAssetId = "TRIPODS", quantity = 2 });
         Assert.Equal(HttpStatusCode.Created, checkout.StatusCode);
+        Assert.Equal(HttpStatusCode.Created,
+            (await otherBorrower.PostAsJsonAsync("/api/custody/checkouts",
+                new { equipmentAssetId = "CAMERA-DEMO-01" })).StatusCode);
 
         var projection = await client.GetFromJsonAsync<JsonElement>("/api/custody/active");
         var record = Assert.Single(projection.EnumerateArray());
@@ -198,6 +205,9 @@ public class CustodyTests
         Assert.Equal("ali@equipment.local", record.GetProperty("borrower").GetString());
         Assert.Equal(2, record.GetProperty("outstandingQuantity").GetInt32());
         Assert.Equal("DueSoon", record.GetProperty("dueStatus").GetString());
+
+        var officeProjection = await office.GetFromJsonAsync<JsonElement>("/api/custody/active");
+        Assert.Equal(2, officeProjection.EnumerateArray().Count());
     }
 
     [Fact]

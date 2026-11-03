@@ -73,7 +73,9 @@ type Custody = {
           </form>
           @if (catalogueLoading) { <p>Loading catalogue…</p> }
           @if (catalogueError) { <p class="error" role="alert">{{ catalogueError }}</p> }
-          @if (!catalogueLoading && !catalogueError && equipment.length === 0) { <p>No equipment matches your search.</p> }
+          @if (!catalogueLoading && !catalogueError && equipment.length === 0) {
+            <p>{{ search.trim() ? 'No equipment matches your search.' : 'No equipment has been added.' }}</p>
+          }
           @if (equipment.length > 0) {
             <ul class="catalogue">@for (item of equipment; track item.assetId) {
               <li><button type="button" class="equipment-link" (click)="selectEquipment(item)"><strong>{{ item.name }}</strong> ({{ item.assetId }})</button></li>
@@ -92,12 +94,14 @@ type Custody = {
               }
               <p><strong>Approval:</strong> {{ item.approvalRequired ? 'Restricted' : 'Not restricted' }}</p>
               @if (item.approvalRequired) { <p class="notice">Restricted equipment requires an approved request.</p> }
-              @if (item.isAvailable || (item.trackingMode === 'Pooled' && item.available > 0)) {
+              @if (!item.approvalRequired && (item.isAvailable || (item.trackingMode === 'Pooled' && item.available > 0))) {
                 <form (ngSubmit)="checkout(item)" #checkoutForm="ngForm" aria-label="Check out equipment">
                   @if (item.trackingMode === 'Pooled') {
                     <label [for]="'checkout-quantity-' + item.assetId">Quantity</label>
                     <input [id]="'checkout-quantity-' + item.assetId" name="checkoutQuantity" type="number" min="1" [max]="item.available" step="1" [(ngModel)]="checkoutQuantity" required>
                   }
+                  <label [for]="'due-at-' + item.assetId">Expected return</label>
+                  <input [id]="'due-at-' + item.assetId" name="dueAt" type="datetime-local" [(ngModel)]="expectedDueAt" required>
                   <label [for]="'location-' + item.assetId">Location (optional)</label>
                   <input [id]="'location-' + item.assetId" name="location" maxlength="200" [(ngModel)]="declaredLocation">
                   <button type="submit" [disabled]="checkingOut || checkoutForm.invalid">{{ checkingOut ? 'Checking out…' : 'Check out' }}</button>
@@ -132,24 +136,25 @@ class AppComponent implements OnInit {
   equipment: Equipment[] = []; selectedEquipment: Equipment | null = null; search = ''; catalogueLoading = false; catalogueError = '';
   activeCustody: Custody[] = []; custodyLoading = false; custodyError = '';
   equipmentName = ''; assetId = ''; trackingMode = 'Individual'; total: number | null = null; creating = false; createError = '';
-  checkoutQuantity = 1; declaredLocation = ''; checkingOut = false; returningId: string | null = null;
+  checkoutQuantity = 1; expectedDueAt = ''; declaredLocation = ''; checkingOut = false; returningId: string | null = null;
   returnCondition: Record<string, string> = {}; returnQuantity: Record<string, number> = {}; goodQuantity: Record<string, number> = {}; damagedQuantity: Record<string, number> = {}; returnNote: Record<string, string> = {};
   workflowMessage = ''; workflowError = '';
   get canCreate(): boolean { return this.session?.roles.some(role => role === 'Office Staff' || role === 'Manager/Admin') ?? false; }
 
   async ngOnInit(): Promise<void> {
+    this.expectedDueAt = this.tomorrowDateTimeLocal();
     try { const response = await fetch('/api/auth/me', { credentials: 'same-origin' }); if (response.ok) { this.session = await response.json() as Session; await this.refreshState(); } }
     catch { this.error = 'The local sign-in service is unavailable.'; }
   }
   async refreshState(): Promise<void> { await Promise.all([this.loadCatalogue(), this.loadCustody()]); }
   async loadCustody(): Promise<void> {
     this.custodyLoading = true; this.custodyError = '';
-    try { const response = await fetch('/api/custody/active', { credentials: 'same-origin' }); if (!response.ok) { this.custodyError = response.status === 401 ? 'Please sign in again.' : 'Unable to load active custody.'; return; } this.activeCustody = await response.json() as Custody[]; }
+    try { const response = await fetch('/api/custody/active', { credentials: 'same-origin' }); if (!response.ok) { this.activeCustody = []; if (response.status === 401) this.session = null; this.custodyError = response.status === 401 ? 'Please sign in again.' : 'Unable to load active custody.'; return; } this.activeCustody = await response.json() as Custody[]; }
     catch { this.activeCustody = []; this.custodyError = 'The local equipment service is unavailable.'; } finally { this.custodyLoading = false; }
   }
   async loadCatalogue(): Promise<void> {
     this.catalogueLoading = true; this.catalogueError = '';
-    try { const query = this.search.trim() ? `?search=${encodeURIComponent(this.search.trim())}` : ''; const response = await fetch(`/api/equipment${query}`, { credentials: 'same-origin' }); if (!response.ok) { if (response.status === 401) this.session = null; this.catalogueError = response.status === 401 ? 'Please sign in again.' : 'Unable to load the equipment catalogue.'; return; } this.equipment = await response.json() as Equipment[]; this.selectedEquipment = null; }
+    try { const query = this.search.trim() ? `?search=${encodeURIComponent(this.search.trim())}` : ''; const response = await fetch(`/api/equipment${query}`, { credentials: 'same-origin' }); if (!response.ok) { this.equipment = []; this.selectedEquipment = null; if (response.status === 401) this.session = null; this.catalogueError = response.status === 401 ? 'Please sign in again.' : 'Unable to load the equipment catalogue.'; return; } this.equipment = await response.json() as Equipment[]; this.selectedEquipment = null; }
     catch { this.equipment = []; this.selectedEquipment = null; this.catalogueError = 'The local equipment service is unavailable.'; } finally { this.catalogueLoading = false; }
   }
   searchCatalogue(): Promise<void> { return this.loadCatalogue(); }
@@ -158,7 +163,7 @@ class AppComponent implements OnInit {
   private async responseError(response: Response, fallback: string): Promise<string> { const body = await response.json().catch(() => null) as { error?: string } | null; return body?.error ?? (response.status === 401 ? 'Please sign in again.' : response.status === 403 ? 'You are not authorized for this action.' : response.status === 409 ? 'The record changed. The latest state has been loaded; try again.' : fallback); }
   async checkout(item: Equipment): Promise<void> {
     this.workflowMessage = ''; this.workflowError = ''; this.checkingOut = true;
-    try { const response = await fetch('/api/custody/checkouts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ equipmentAssetId: item.assetId, quantity: item.trackingMode === 'Pooled' ? this.checkoutQuantity : null, declaredLocation: this.declaredLocation }) }); if (!response.ok) { this.workflowError = await this.responseError(response, 'Unable to check out equipment.'); if (response.status === 409) await this.refreshState(); return; } this.workflowMessage = 'Equipment checked out successfully.'; this.declaredLocation = ''; this.checkoutQuantity = 1; await this.refreshState(); }
+    try { const response = await fetch('/api/custody/checkouts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ equipmentAssetId: item.assetId, quantity: item.trackingMode === 'Pooled' ? this.checkoutQuantity : null, dueAt: this.expectedDueAt ? new Date(this.expectedDueAt).toISOString() : null, declaredLocation: this.declaredLocation }) }); if (!response.ok) { this.workflowError = await this.responseError(response, 'Unable to check out equipment.'); if (response.status === 401) this.session = null; if (response.status === 409) await this.refreshState(); return; } this.workflowMessage = 'Equipment checked out successfully.'; this.declaredLocation = ''; this.checkoutQuantity = 1; this.expectedDueAt = this.tomorrowDateTimeLocal(); await this.refreshState(); }
     catch { this.workflowError = 'The equipment service is unavailable. No checkout was recorded.'; } finally { this.checkingOut = false; }
   }
   async returnEquipment(record: Custody): Promise<void> {
@@ -170,9 +175,14 @@ class AppComponent implements OnInit {
   }
   async createEquipment(): Promise<void> {
     this.createError = ''; if (!this.equipmentName.trim() || !this.assetId.trim() || (this.trackingMode === 'Pooled' && (!Number.isInteger(this.total) || (this.total ?? 0) <= 0))) { this.createError = 'Enter valid equipment details.'; return; } this.creating = true;
-    try { const response = await fetch('/api/equipment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ name: this.equipmentName, assetId: this.assetId, trackingMode: this.trackingMode, total: this.trackingMode === 'Pooled' ? this.total : null }) }); if (!response.ok) { this.createError = await this.responseError(response, 'Unable to add equipment.'); return; } this.equipmentName = ''; this.assetId = ''; this.total = null; await this.loadCatalogue(); } catch { this.createError = 'The local equipment service is unavailable.'; } finally { this.creating = false; }
+    try { const response = await fetch('/api/equipment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ name: this.equipmentName, assetId: this.assetId, trackingMode: this.trackingMode, total: this.trackingMode === 'Pooled' ? this.total : null }) }); if (!response.ok) { if (response.status === 401) this.session = null; this.createError = await this.responseError(response, 'Unable to add equipment.'); return; } this.equipmentName = ''; this.assetId = ''; this.total = null; await this.loadCatalogue(); } catch { this.createError = 'The local equipment service is unavailable.'; } finally { this.creating = false; }
   }
   async login(): Promise<void> { this.error = ''; this.loading = true; try { const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ email: this.email, password: this.password }) }); if (!response.ok) { this.error = 'Sign-in failed. Check your email and password.'; return; } this.session = await response.json() as Session; this.password = ''; await this.refreshState(); } catch { this.error = 'The local sign-in service is unavailable.'; } finally { this.loading = false; } }
   async logout(): Promise<void> { try { const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); if (!response.ok) { this.error = 'Sign-out failed. Please try again.'; return; } this.session = null; this.equipment = []; this.activeCustody = []; this.selectedEquipment = null; } catch { this.error = 'The local equipment service is unavailable.'; } }
+  private tomorrowDateTimeLocal(): string {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const pad = (value: number) => value.toString().padStart(2, '0');
+    return `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}T${pad(tomorrow.getHours())}:${pad(tomorrow.getMinutes())}`;
+  }
 }
 bootstrapApplication(AppComponent).catch(console.error);
